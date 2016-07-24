@@ -48,7 +48,7 @@ from contextlib import contextmanager
 from glob import glob
 from uuid import UUID
 
-if sys.version_info[0] != 2 or sys.version_info[1] != 7:
+if sys.version_info.major != 2 or sys.version_info.minor != 7:
     sys.exit("\nCQL Shell supports only Python 2.7\n")
 
 # see CASSANDRA-10428
@@ -295,7 +295,8 @@ my_commands_ending_with_newline = (
     'exit',
     'quit',
     'clear',
-    'cls'
+    'cls',
+    'q'
 )
 
 
@@ -329,6 +330,8 @@ cqlsh_extra_syntax_rules = r'''
                    | <exitCommand>
                    | <pagingCommand>
                    | <clearCommand>
+                   | <aliasCommand>
+                   | <aliasexpansionCommand>
                    ;
 
 <describeCommand> ::= ( "DESCRIBE" | "DESC" )
@@ -352,6 +355,12 @@ cqlsh_extra_syntax_rules = r'''
 <consistencyCommand> ::= "CONSISTENCY" ( level=<consistencyLevel> )?
                        ;
 
+<aliasexpansionCommand> ::= [alias]=( /[a-z_]*/ )
+                    ;
+
+<aliasCommand> ::= "alias" ( /[a-z_]*/ )* ( "=" ) ( <cqlshCommand> )?
+                     ;
+
 <consistencyLevel> ::= "ANY"
                      | "ONE"
                      | "TWO"
@@ -372,7 +381,7 @@ cqlsh_extra_syntax_rules = r'''
                            | "LOCAL_SERIAL"
                            ;
 
-<showCommand> ::= "SHOW" what=( "VERSION" | "HOST" | "SESSION" sessionid=<uuid> )
+<showCommand> ::= "SHOW" what=( "ALIASES" | "VERSION" | "HOST" | "SESSION" sessionid=<uuid> )
                 ;
 
 <sourceCommand> ::= "SOURCE" fname=<stringLiteral>
@@ -415,7 +424,7 @@ cqlsh_extra_syntax_rules = r'''
 <loginCommand> ::= "LOGIN" username=<username> (password=<stringLiteral>)?
                  ;
 
-<exitCommand> ::= "exit" | "quit"
+<exitCommand> ::= "exit" | "quit" | "q"
                 ;
 
 <clearCommand> ::= "CLEAR" | "CLS"
@@ -423,6 +432,16 @@ cqlsh_extra_syntax_rules = r'''
 
 <qmark> ::= "?" ;
 '''
+
+@cqlsh_syntax_completer('aliasexpansionCommand', 'alias')
+def complete_alias(ctxt,cqlsh):
+  try:
+    config=ConfigParser.RawConfigParser()
+    config.read(CONFIG_FILE)
+    aliases=[tup[0] for tup in config.items('aliases')]
+    return sorted(aliases)
+  except Exception,e:
+    return []
 
 
 @cqlsh_syntax_completer('helpCommand', 'topic')
@@ -660,7 +679,7 @@ class Shell(cmd.Cmd):
     default_page_size = 100
 
     def __init__(self, hostname, port, color=False,
-                 username=None, password=None, encoding=None, stdin=None, tty=True,
+                 username=None, password=None, aliases=None, safe_mode=None, encoding=None, stdin=None, tty=True,
                  completekey=DEFAULT_COMPLETEKEY, browser=None, use_conn=None,
                  cqlver=None, keyspace=None,
                  tracing_enabled=False, expand_enabled=False,
@@ -701,7 +720,10 @@ class Shell(cmd.Cmd):
                                 control_connection_timeout=connect_timeout,
                                 connect_timeout=connect_timeout)
         self.owns_connection = not use_conn
-
+        
+        self.aliases=aliases
+        self.safe_mode=safe_mode
+        
         if keyspace:
             self.session = self.conn.connect(keyspace)
         else:
@@ -1127,6 +1149,28 @@ class Shell(cmd.Cmd):
         can be reset).
         """
 
+        alias_found=False
+        if self.aliases:
+                strings=statementtext.split()
+                alias_string=strings[0].lower().rstrip(";")
+                if alias_string in self.aliases.keys():
+                   if len(strings)>1:
+                     statementtext=' '.join(self.aliases[alias_string].split()+strings[1:])+"\n"
+                   else:
+                     statementtext=self.aliases[alias_string]
+                   print "Expanded alias to> %s" % (statementtext)
+                   alias_found=True
+
+        if self.safe_mode and ((statementtext.strip().lower().startswith(("delete","update"))) or statementtext.lower().strip().startswith("truncate")):
+           if "where" in statementtext.strip().lower():
+               yes_or_no=raw_input("Are you sure you want to do this? (y/n) > ")
+               if yes_or_no!="y":
+                 print "Cancelled deletion."
+                 return True
+           else:
+               self.printerr('Are you sure you want to do it? Disable "safe_mode" flag in cqlshrc to perform it but make sure you know what you are doing.')
+               return True
+
         try:
             statements, endtoken_escaped = cqlruleset.cql_split_statements(statementtext)
         except pylexotron.LexingError, e:
@@ -1149,7 +1193,7 @@ class Shell(cmd.Cmd):
             return
         for st in statements:
             try:
-                self.handle_statement(st, statementtext)
+                self.handle_statement(st, statementtext,alias_found)
             except Exception, e:
                 if self.debug:
                     traceback.print_exc()
@@ -1166,14 +1210,14 @@ class Shell(cmd.Cmd):
                 self.printerr('Incomplete statement at end of file')
         self.do_exit()
 
-    def handle_statement(self, tokens, srcstr):
+    def handle_statement(self, tokens, srcstr,alias_found):
         # Concat multi-line statements and insert into history
         if readline is not None:
             nl_count = srcstr.count("\n")
 
             new_hist = srcstr.replace("\n", " ").rstrip()
 
-            if nl_count > 1 and self.last_hist != new_hist:
+            if (nl_count > 1 and self.last_hist!=new_hist) or (alias_found):
                 readline.add_history(new_hist.encode(self.encoding))
 
             self.last_hist = new_hist
@@ -1187,6 +1231,8 @@ class Shell(cmd.Cmd):
             if parsed and not parsed.remainder:
                 # successful complete parse
                 return custom_handler(parsed)
+            elif cmdword.lower()=="alias":
+                return custom_handler(srcstr.strip().lower())
             else:
                 return self.handle_parse_error(cmdword, tokens, parsed, srcstr)
         return self.perform_statement(cqlruleset.cql_extract_orig(tokens, srcstr))
@@ -1430,6 +1476,13 @@ class Shell(cmd.Cmd):
     def find_completions(self, text):
         curline = readline.get_line_buffer()
         prevlines = self.statement.getvalue()
+        if self.aliases:
+            if prevlines.strip().lower() in self.aliases.keys():
+               prevlines=self.aliases[prevlines.strip().lower()]+" "
+            if curline.endswith(" ") and curline.strip().lower() in self.aliases.keys():
+               pass
+            elif curline.strip().lower() in self.aliases.keys():
+               return [self.aliases[curline.strip().lower()]+" "]
         wholestmt = prevlines + curline
         begidx = readline.get_begidx() + len(prevlines)
         stuff_to_complete = wholestmt[:begidx]
@@ -1648,6 +1701,26 @@ class Shell(cmd.Cmd):
                 self.print_recreate_keyspace(k, sys.stdout)
                 print
 
+    def do_alias(self,statement):
+       try:
+            left=statement.split('=',1)[0]
+            right=statement.split('=',1)[1].strip()
+            alias_name=left.split()[1]
+            config=ConfigParser.RawConfigParser()
+            config.read(CONFIG_FILE)
+            if not config.has_section('aliases'):
+              config.add_section('aliases')
+            config.set('aliases',alias_name,right)
+            with open(CONFIG_FILE,'w+') as configfile:
+                config.write(configfile)
+                print "Alias added successfully - %s:%s" % (alias_name,right)
+                self.aliases[alias_name]=right
+                cqlsh_syntax_completer('aliasexpansionCommand','alias')(complete_alias)
+                return True
+       except Exception,e:
+            print "Error in creating alias - "+str(e)
+            return False
+    
     def do_describe(self, parsed):
         """
         DESCRIBE [cqlsh only]
@@ -1942,6 +2015,8 @@ class Shell(cmd.Cmd):
         elif showwhat.startswith('session'):
             session_id = parsed.get_binding('sessionid').lower()
             self.show_session(UUID(session_id))
+        elif showwhat.startswith('aliases'):
+            print "Aliases :>",self.aliases
         else:
             self.printerr('Wait, how do I show %r?' % (showwhat,))
 
@@ -2193,6 +2268,7 @@ class Shell(cmd.Cmd):
         if self.owns_connection:
             self.conn.shutdown()
     do_quit = do_exit
+    do_q = do_exit
 
     def do_clear(self, parsed):
         """
@@ -2466,6 +2542,14 @@ def read_options(cmdlineargs, environment):
     hostname = option_with_default(configs.get, 'connection', 'hostname', DEFAULT_HOST)
     port = option_with_default(configs.get, 'connection', 'port', DEFAULT_PORT)
 
+    options.safe_mode=raw_option_with_default(configs, 'misc', 'safe_mode',
+                                                    False)
+
+    try:
+        options.aliases=dict(rawconfigs.items('aliases'))
+    except Exception,e:
+        options.aliases=None
+
     try:
         options.connect_timeout = int(options.connect_timeout)
     except ValueError:
@@ -2622,7 +2706,9 @@ def main(options, hostname, port):
                       single_statement=options.execute,
                       request_timeout=options.request_timeout,
                       connect_timeout=options.connect_timeout,
-                      encoding=options.encoding)
+                      encoding=options.encoding,
+                      aliases=options.aliases,
+                      safe_mode=options.safe_mode)
     except KeyboardInterrupt:
         sys.exit('Connection aborted.')
     except CQL_ERRORS, e:
