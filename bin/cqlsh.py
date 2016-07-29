@@ -1161,7 +1161,7 @@ class Shell(cmd.Cmd):
                    print "Expanded alias to> %s" % (statementtext)
                    alias_found=True
 
-        if self.safe_mode and ((statementtext.strip().lower().startswith(("delete","update"))) or statementtext.lower().strip().startswith("truncate")):
+        if self.safe_mode and ((statementtext.strip().lower().startswith(("delete","update"))) or statementtext.lower().strip().startswith(("truncate","drop"))):
            if "where" in statementtext.strip().lower():
                yes_or_no=raw_input("Are you sure you want to do this? (y/n) > ")
                if yes_or_no!="y":
