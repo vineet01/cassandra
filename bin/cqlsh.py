@@ -1707,6 +1707,7 @@ class Shell(cmd.Cmd):
             config.read(CONFIG_FILE)
             if not config.has_section('aliases'):
               config.add_section('aliases')
+              self.aliases={}
             config.set('aliases',alias_name,right)
             with open(CONFIG_FILE,'w+') as configfile:
                 config.write(configfile)
