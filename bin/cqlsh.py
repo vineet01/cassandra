@@ -1715,7 +1715,7 @@ class Shell(cmd.Cmd):
                 cqlsh_syntax_completer('aliasexpansionCommand','alias')(complete_alias)
                 return True
        except Exception,e:
-            print "Error in creating alias - "+str(e)
+            self.printerr("Error in creating alias - {0}".format(str(e))
             return False
     
     def do_describe(self, parsed):
