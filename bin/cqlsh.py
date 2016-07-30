@@ -1149,7 +1149,6 @@ class Shell(cmd.Cmd):
         can be reset).
         """
 
-        alias_found=False
         if self.aliases:
                 strings=statementtext.split()
                 alias_string=strings[0].lower().rstrip(";")
@@ -1158,18 +1157,16 @@ class Shell(cmd.Cmd):
                      statementtext=' '.join(self.aliases[alias_string].split()+strings[1:])+"\n"
                    else:
                      statementtext=self.aliases[alias_string]
+                     if not statementtext.endswith(";") and strings[0].lower().endswith(";"):
+                        statementtext=statementtext+";"
                    print "Expanded alias to> %s" % (statementtext)
-                   alias_found=True
+                   
 
-        if self.safe_mode and ((statementtext.strip().lower().startswith(("delete","update"))) or statementtext.lower().strip().startswith(("truncate","drop"))):
-           if "where" in statementtext.strip().lower():
-               yes_or_no=raw_input("Are you sure you want to do this? (y/n) > ")
-               if yes_or_no!="y":
-                 print "Cancelled deletion."
-                 return True
-           else:
-               self.printerr('Are you sure you want to do it? Disable "safe_mode" flag in cqlshrc to perform it but make sure you know what you are doing.')
-               return True
+        if self.safe_mode and statementtext.strip().lower().startswith(("delete","update","drop","truncate")):
+            yes_or_no=raw_input("Are you sure you want to do this? (y/n) > ")
+            if yes_or_no!="y":
+                print "Not performing any action."
+                return True
 
         try:
             statements, endtoken_escaped = cqlruleset.cql_split_statements(statementtext)
@@ -1193,7 +1190,7 @@ class Shell(cmd.Cmd):
             return
         for st in statements:
             try:
-                self.handle_statement(st, statementtext,alias_found)
+                self.handle_statement(st, statementtext)
             except Exception, e:
                 if self.debug:
                     traceback.print_exc()
@@ -1210,14 +1207,14 @@ class Shell(cmd.Cmd):
                 self.printerr('Incomplete statement at end of file')
         self.do_exit()
 
-    def handle_statement(self, tokens, srcstr,alias_found):
+    def handle_statement(self, tokens, srcstr):
         # Concat multi-line statements and insert into history
         if readline is not None:
             nl_count = srcstr.count("\n")
 
             new_hist = srcstr.replace("\n", " ").rstrip()
 
-            if (nl_count > 1 and self.last_hist!=new_hist) or (alias_found):
+            if nl_count > 1 and self.last_hist!=new_hist:
                 readline.add_history(new_hist.encode(self.encoding))
 
             self.last_hist = new_hist
