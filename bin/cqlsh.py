@@ -1150,6 +1150,7 @@ class Shell(cmd.Cmd):
         """
 
         if self.aliases:
+            try:
                 strings=statementtext.split()
                 alias_string=strings[0].lower().rstrip(";")
                 if alias_string in self.aliases.keys():
@@ -1160,9 +1161,13 @@ class Shell(cmd.Cmd):
                      if not statementtext.endswith(";") and strings[0].lower().endswith(";"):
                         statementtext=statementtext+";"
                    print "Expanded alias to> %s" % (statementtext)
+           except IndexError:
+                pass
+           except:
+                raise
                    
 
-        if self.safe_mode and statementtext.strip().lower().startswith(("delete","update","drop","truncate")):
+        if self.safe_mode and statement and statementtext.strip().lower().startswith(("delete","update","drop","truncate")):
             yes_or_no=raw_input("Are you sure you want to do this? (y/n) > ")
             if yes_or_no!="y":
                 print "Not performing any action."
